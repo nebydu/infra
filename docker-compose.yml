@@ -1,0 +1,86 @@
+# 모니터링 데모용 인프라 — Kafka broker + OTel Collector.
+#
+# 위치 의도:
+#   부모 워크스페이스 C:\workspace\monitoring\infra\ — script-agent와
+#   monitoring-be(추후) 양쪽이 이 단일 broker를 공유한다.
+#
+# 사용:
+#   docker compose -f infra/docker-compose.yml up -d
+#
+# 접속:
+#   - 호스트에서 직접 띄운 Agent/BE         : localhost:9092
+#   - 같은 compose network의 컨테이너(향후) : kafka:29092
+#   - Agent → Collector (heartbeat OTLP HTTP): http://localhost:14318
+#     (호스트 14318 → 컨테이너 4318. Windows가 4318을 Hyper-V 범위로
+#     예약하기 때문에 호스트 측 포트만 우회. 컨테이너 내부와 Collector
+#     설정은 표준 4318 그대로.)
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # dual listener — HOST(외부)와 DOCKER(컨테이너 내부) 모두 노출
+      KAFKA_LISTENERS: HOST://0.0.0.0:9092,DOCKER://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,DOCKER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # 운영 표준: 토픽은 kafka-init이 명시적으로 사전 생성한다.
+      # auto-create는 안전망으로만 켜둠 (init 실패 시 fallback).
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
+
+  # Kafka 토픽 사전 생성 — 운영 표준(auto-create 의존 제거).
+  # 클라이언트가 처음 produce하는 시점에 'Unknown Topic Or Partition'
+  # 레이스를 피하기 위함. one-shot 컨테이너로 실행 후 정상 종료한다.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.3
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command: |
+      bash -c '
+        set -e
+        for t in commands job-results audit-events heartbeats; do
+          kafka-topics --bootstrap-server kafka:29092 \
+            --create --if-not-exists \
+            --topic "$$t" \
+            --partitions 1 \
+            --replication-factor 1
+        done
+        echo "kafka-init done"
+      '
+
+  # OTel Collector — Agent의 heartbeat 메트릭을 OTLP HTTP로 수신해
+  # Kafka `heartbeats` 토픽으로 otlp_json 인코딩으로 재발행 (spec §5.4).
+  # contrib 빌드를 쓰는 이유: 코어 빌드에는 kafka exporter가 없음.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.110.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "14318:4318"
+    volumes:
+      - ./otel-collector-config.yml:/etc/otelcol-contrib/config.yaml:ro
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]

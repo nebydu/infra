@@ -1,0 +1,24 @@
+# OTel Collector 설정 — Agent의 heartbeat 메트릭만 다룸.
+#
+# 흐름: Agent(OTLP HTTP) → otlp receiver → kafka exporter (otlp_json) → topic "heartbeats"
+#
+# spec §5.4 / ADR #2, #13 참조.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  kafka:
+    # 같은 compose network — 내부 DOCKER listener 사용.
+    brokers: [kafka:29092]
+    topic: heartbeats
+    encoding: otlp_json
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [kafka]

@@ -61,7 +61,7 @@ services:
     command: |
       bash -c '
         set -e
-        for t in commands job-results audit-events heartbeats; do
+        for t in command-topic job-results audit-topic heartbeats-topic; do
           kafka-topics --bootstrap-server kafka:29092 \
             --create --if-not-exists \
             --topic "$$t" \
@@ -72,7 +72,7 @@ services:
       '
 
   # OTel Collector — Agent의 heartbeat 메트릭을 OTLP HTTP로 수신해
-  # Kafka `heartbeats` 토픽으로 otlp_proto(protobuf) 인코딩으로 재발행
+  # Kafka `heartbeats-topic` 토픽으로 otlp_proto(protobuf) 인코딩으로 재발행
   # (spec §5.4, ADR-0002 A-1 — Phase 1 protobuf 전환).
   # contrib 빌드를 쓰는 이유: 코어 빌드에는 kafka exporter가 없음.
   otel-collector:

@@ -1,6 +1,6 @@
 # OTel Collector 설정 — Agent의 heartbeat 메트릭만 다룸.
 #
-# 흐름: Agent(OTLP HTTP) → otlp receiver → kafka exporter (otlp_proto) → topic "heartbeats"
+# 흐름: Agent(OTLP HTTP) → otlp receiver → kafka exporter (otlp_proto) → topic "heartbeats-topic"
 #
 # ADR-0002(A-1): heartbeat wire format = OTLP 표준 protobuf(otlp_proto).
 # 컷오버 C-1(빅뱅) — hub 디코더 교체(adr-002-hub)와 반드시 동시 배포할 것.
@@ -16,7 +16,7 @@ exporters:
   kafka:
     # 같은 compose network — 내부 DOCKER listener 사용.
     brokers: [kafka:29092]
-    topic: heartbeats
+    topic: heartbeats-topic
     encoding: otlp_proto
 
 service:

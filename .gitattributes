@@ -1,0 +1,3 @@
+# 셸 스크립트와 codex-gate profile은 항상 LF 유지 (CRLF 시 Git Bash에서 '\r' 파싱 오류로 hook 실패)
+*.sh text eol=lf
+.claude/codex-gate.profile text eol=lf

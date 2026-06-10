@@ -85,3 +85,142 @@ services:
     volumes:
       - ./otel-collector-config.yml:/etc/otelcol-contrib/config.yaml:ro
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # T1-1 영속 저장소(데이터스토어 4종) — phase1-050-infra.
+  #
+  #   PostgreSQL / OpenSearch / Redis / MinIO 를 self-host 단일노드로 추가.
+  #   같은 compose network(infra_default)를 공유 — 컨테이너 간은 서비스명으로
+  #   접속(postgres:5432 / opensearch:9200 / redis:6379 / minio:9000).
+  #
+  #   접속(호스트):  postgres localhost:5432 / opensearch localhost:9200 /
+  #                  redis localhost:6379 / minio API localhost:9000·콘솔 9001.
+  #
+  #   ★ dev-local only — 공유망/실서버 사용 금지 ★
+  #     - 보안 미설정(OpenSearch security plugin off, TLS/인증 없음)이므로
+  #       host port는 모두 127.0.0.1 에만 바인딩한다(외부 노출 차단).
+  #       원격 접근이 필요하면 .env 의 *_BIND 를 명시적으로 override 하라.
+  #     - 전송계층 보안·전사 시크릿(Vault/KMS)·mTLS 하드닝은 통합본 §9 베이스라인
+  #       목표(line 768 mTLS+Vault+OIDC, line 742 하드코딩 부채 청산)이며,
+  #       구체화는 G-3(site 보안정책 [Open])·T1-2(인증) 해소 후. 후속 과제:
+  #         · OpenSearch 전송보안 활성 — 트리거 G-3+PKI확정 / 소유 infra / 산출 TLS·cert-manager
+  #         · 전사 시크릿(Vault/KMS) — 트리거 Vault도입 / 소유 infra / .env→K8s Secret→Vault(동일 변수명)
+  #         · 인증/RBAC 연동 — 트리거 T1-2 착수 / 소유 hub / OIDC·RBAC 매핑
+  #         · 실서버 전환 — 트리거 G-3 sizing/topology / 소유 infra / compose→K8s·HA·Service/Ingress
+  #     - credential/port는 .env 로 주입(하드코딩 평문 금지, ${VAR:?} 로 강제).
+  #
+  #   범위 가드: 도메인 테이블/인덱스 DDL·repository·모듈경계·PG 스키마 분리(M-1)·
+  #             site sizing(G-3) 금지. 빈 DB/일반 인덱스 템플릿/중립 버킷까지만.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # PostgreSQL — 빈 연결 DB + 접속 계정(env 부트스트랩)까지만.
+  # 도메인 스키마/테이블 DDL은 만들지 않는다(M-1 PG 스키마 분리 = 통합본 §4.2.4 [Open,7장]).
+  postgres:
+    image: postgres:16.6
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    ports:
+      - "${PG_BIND:-127.0.0.1}:${PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # OpenSearch — 단일노드. security plugin 비활성(dev-local only, http).
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "${OS_BIND:-127.0.0.1}:${OS_PORT:-9200}:9200"
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 30s
+
+  # OpenSearch 부트스트랩 — 일반 인덱스 템플릿 + ISM 정책 골격(도메인 무관) 적용.
+  # 적용 로직/JSON은 ./opensearch 로 외부화(향후 K8s Job/Helm hook 재사용).
+  opensearch-init:
+    image: curlimages/curl:8.11.1
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["sh", "/work/init-templates.sh"]
+    environment:
+      OS_ENDPOINT: http://opensearch:9200
+    volumes:
+      - ./opensearch:/work:ro
+
+  # Redis — 캐시 용도만(통합본 blpop 폐기 방침). 영속 볼륨 없음.
+  redis:
+    image: redis:7.4
+    command: ["sh", "-c", "redis-server --maxmemory \"$$REDIS_MAXMEM\" --maxmemory-policy allkeys-lru --appendonly no --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      REDIS_MAXMEM: ${REDIS_MAXMEM:-256mb}
+    ports:
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # MinIO — Object Storage. ubi-micro 기반이라 컨테이너 내 healthcheck가 어려워,
+  # readiness 게이트는 minio-init(mc retry 루프)이 담당한다.
+  minio:
+    image: minio/minio:RELEASE.2024-10-29T16-01-48Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    ports:
+      - "${MINIO_BIND:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_BIND:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+
+  # MinIO 부트스트랩 — 중립명 일반 버킷 + 접근 제어 골격(비공개) 생성.
+  # 도메인명 버킷/실 스크립트 객체 배치는 제외(T3-5 소유). 스크립트는 ./minio 로 외부화.
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-29T15-34-59Z
+    depends_on:
+      - minio
+    restart: "no"
+    entrypoint: ["sh", "/work/init-buckets.sh"]
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      MINIO_DEFAULT_BUCKET: ${MINIO_DEFAULT_BUCKET:-app-objects}
+    volumes:
+      - ./minio:/work:ro
+
+# named volume — 신규 4종 영속(redis 제외, 캐시). 기존 kafka/zookeeper는 볼륨 없음.
+# rollback 시 이 볼륨들만 선별 제거(전역 down -v 금지).
+volumes:
+  pgdata:
+  osdata:
+  miniodata:

@@ -1,0 +1,42 @@
+{
+  "policy": {
+    "description": "general retention skeleton (rollover by size/age, then delete). domain-specific retention is overridden at app layer (D-2).",
+    "default_state": "hot",
+    "states": [
+      {
+        "name": "hot",
+        "actions": [
+          {
+            "rollover": {
+              "min_size": "10gb",
+              "min_index_age": "7d"
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "delete",
+            "conditions": {
+              "min_index_age": "30d"
+            }
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [
+          {
+            "delete": {}
+          }
+        ],
+        "transitions": []
+      }
+    ],
+    "ism_template": [
+      {
+        "index_patterns": ["app-*"],
+        "priority": 1
+      }
+    ]
+  }
+}

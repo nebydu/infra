@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-06-10T10:20:36.005169+09:00",
+  "context": "profile: C:/workspace/monitoring/infra/.claude/proposal-review.profile",
+  "context_docs": [
+    "C:/workspace/monitoring/infra/docker-compose.yml",
+    "/c/workspace/monitoring/infra/otel-collector-config.yml",
+    "/c/workspace/monitoring/infra/../monitoring-meta/adr/0002-heartbeat-otlp-proto.md",
+    "/c/workspace/monitoring/infra/../monitoring-meta/adr/0005-topic-naming.md",
+    "/c/workspace/monitoring/infra/../monitoring-meta/docs/kafka-payloads.md",
+    "/c/workspace/monitoring/infra/../monitoring-meta/docs/phase0-snapshot/monitoring-demo-message-spec-v0.2.1.md"
+  ],
+  "proposal": "context: |\n  phase1-050-infra(T1-1 데이터스토어 4종 self-host) 구현 완료, 커밋 전 검토.\n  1차 proposal-review(revise)의 critical/recommended를 모두 반영해 구현했고, 이제 as-built\n  결과물이 핸드오프 OUT-OF-SCOPE와 반영분을 제대로 지켰는지 커밋 전 확인하려 한다.\n  Docker 데몬 미기동으로 실제 up -d는 미실행(deferred), config 레벨 검증만 수행.\n\nproposal: |\n  docker-compose.yml에 신규 추가(기존 zookeeper/kafka/kafka-init/otel-collector는 무수정):\n  - postgres:16.6 — env POSTGRES_USER/PASSWORD/DB ${VAR:?} 강제, volume pgdata,\n    healthcheck pg_isready, 포트 ${PG_BIND:-127.0.0.1}:${PG_PORT:-5432}:5432. 도메인 DDL 없음.\n  - opensearchproject/opensearch:2.18.0 — discovery.type=single-node, DISABLE_SECURITY_PLUGIN=true,\n    bootstrap.memory_lock=true + ulimits memlock -1/nofile 65536, JAVA_OPTS -Xms512m -Xmx512m,\n    volume osdata, healthcheck curl _cluster/health green|yellow, 포트 127.0.0.1:9200.\n  - opensearch-init: curlimages/curl:8.11.1, depends_on opensearch service_healthy, restart no,\n    entrypoint sh /work/init-templates.sh, ./opensearch:/work:ro 마운트.\n  - redis:7.4 — command sh -c \"redis-server --maxmemory $REDIS_MAXMEM --maxmemory-policy allkeys-lru\n    --appendonly no --requirepass $REDIS_PASSWORD\"(env로 전달), 영속 볼륨 없음(캐시),\n    healthcheck redis-cli --no-auth-warning -a $REDIS_PASSWORD ping, 포트 127.0.0.1:6379.\n  - minio:RELEASE.2024-10-29T16-01-48Z — server /data --console-address :9001, env ROOT_USER/PASSWORD\n    ${VAR:?}, volume miniodata, 포트 127.0.0.1:9000·9001. 컨테이너 내 healthcheck 없음(ubi-micro라\n    curl/sh 부재) — readiness는 minio-init의 mc retry 루프가 게이트.\n  - minio-init: minio/mc:RELEASE.2024-10-29T15-34-59Z, depends_on minio service_started, restart no,\n    entrypoint sh /work/init-buckets.sh, ./minio:/work:ro.\n  운영골격(도메인 무관):\n  - opensearch/index-template.json(app-* 단일노드 settings + ISM 연결), ism-policy.json(hot→delete\n    rollover 골격). PUT upsert로 멱등 적용.\n  - minio/init-buckets.sh: mc alias retry 루프 → mb --ignore-existing app-objects → anonymous set none.\n    중립명 버킷 1개 + 비공개 정책 골격(도메인 객체 배치 없음, T3-5 소유).\n  volumes: pgdata/osdata/miniodata. 신규 .env.example(placeholder만), .gitignore에 .env 추가.\n  하드닝 후속(트리거/소유/산출물)은 docs/ pre-write-guard 때문에 별도문서 대신 compose 헤더에 수록.\n  검증: docker compose config 무오류(10서비스/3볼륨), env 누락 시 기동 실패, 신규 4종 127.0.0.1 바인딩,\n  기존 kafka/otel 무영향, init .sh LF 확인. 실제 up -d는 데몬 미기동으로 deferred.\n\nalternatives: |\n  - MinIO 컨테이너 내 healthcheck: ubi-micro 이미지에 curl/sh 부재 → 불안정. minio-init mc retry를\n    readiness 게이트로 채택(기각: curl 기반 healthcheck는 이미지 따라 깨짐).\n  - OpenSearch 보안 활성/지금 TLS: G-3·Vault/PKI 미결과 충돌 → 미설정 + 하드닝 후속 문서화(사용자 승인).\n  - credential 인라인 평문: line742 하드코딩 부채 → env ${VAR:?} 방식(사용자 승인).\n  - 하드닝 노트 docs/ 작성: pre-write-guard 차단 → 가드 우회 안 하고 compose 헤더 수록(미검토 대안:\n    사람이 docs/decisions에 정식 기록).\n\nassumptions: |\n  - curlimages/curl·minio/mc 이미지에 /bin/sh 존재(entrypoint sh 동작) — 데몬 기동 후 실증 필요.\n  - opensearch 2.18 이미지에 curl 존재(healthcheck) — 통상 포함.\n  - redis:7.4 docker-entrypoint이 첫 인자 sh일 때 그대로 exec — 표준 동작.\n  - 스토어 추가는 메시지 흐름과 독립이라 Phase 0 e2e(58/0/0) 회귀 0(종단 실측은 meta).\n  - .gitattributes *.sh eol=lf로 커밋 후 LF 유지, 현재 작업트리도 LF 확인됨.\n\nrisks: |\n  - 데몬 미기동으로 실제 기동·init 멱등성·healthcheck 미실증(config 레벨까지만).\n  - OpenSearch Windows vm.max_map_count 부족 시 미기동 가능 → WSL2 sysctl 안내.\n  - minio-init가 service_started 의존이라 minio 완전 기동 전 시작될 수 있으나 mc retry 루프로 흡수.\n  되돌리기: 신규 서비스만 stop/rm + 신규 볼륨만 volume rm(전역 down -v 금지, kafka 보존), compose git revert.\n\ndecision_needed: |\n  (a) as-built가 핸드오프 OUT-OF-SCOPE(도메인 DDL/스키마분리 M-1/site sizing G-3)와 반영분을 지켰는가.\n  (b) MinIO healthcheck를 init retry로 대체한 설계가 수용 가능한가, 아니면 minio 자체 healthcheck를 둬야 하나.\n  (c) 하드닝 노트를 compose 헤더에 둔 것으로 충분한가, 정식 docs 기록이 필요한가.\n  (d) 이대로 커밋해도 되는가(한국어 커밋).",
+  "review": {
+    "verdict": "approve",
+    "critical_issues": [],
+    "missing_context": [
+      "`../monitoring-meta/handoff/phase1-050-infra.md` 원문이 없어, OUT-OF-SCOPE 항목을 문구 단위로 대조할 수는 없다.",
+      "통합본 v0.9의 보안 하드닝·하드코딩 부채 관련 직접 발췌가 없어, line 742/768 근거는 입력에 포함된 compose 주석과 정책 설명에 의존했다."
+    ],
+    "recommended_changes": [
+      "커밋 전 메시지나 PR 본문에 실제 `up -d` 검증이 Docker 데몬 미기동으로 deferred임을 명시하고, 후속 검증 체크리스트에 `docker compose up -d`, init 컨테이너 재실행 멱등성, OpenSearch healthcheck, MinIO bucket 생성 확인을 넣어라.",
+      "MinIO 자체 healthcheck를 억지로 추가하지 말고, 현재처럼 `minio-init`의 `mc` retry 루프를 readiness 게이트로 쓰되 retry timeout/실패 로그가 명확한지 스크립트에서 확인하라.",
+      "하드닝 노트를 compose 헤더에 둔 것은 현재 가드 제약과 dev-local 범위에서는 수용 가능하다. 다만 T1-2/G-3/Vault·PKI 같은 트리거가 열릴 때 정식 `monitoring-meta` 문서나 handoff로 승격해야 한다는 TODO를 커밋 설명에 남겨라.",
+      "롤백 절차는 전역 `down -v` 금지를 유지하고, `pgdata`/`osdata`/`miniodata`만 선별 제거한다는 운영 문구를 PR 본문에도 반복해 실수 가능성을 낮춰라."
+    ],
+    "confidence": "medium",
+    "summary": "방향은 입력 정책과 Accepted ADR에 충돌하지 않는다. 신규 4종 데이터스토어는 dev-local self-host 범위, 127.0.0.1 바인딩, env 기반 credential, 도메인 DDL 배제, Redis 비영속 캐시라는 가드를 대체로 지키고 있으며 Kafka/OTel heartbeat 결정에도 손대지 않는다. 다만 실제 handoff 원문과 Docker 기동 검증이 없으므로 확신은 중간 수준이다."
+  }
+}

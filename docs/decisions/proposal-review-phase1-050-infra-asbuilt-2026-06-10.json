@@ -14,7 +14,7 @@
     "verdict": "approve",
     "critical_issues": [],
     "missing_context": [
-      "`../monitoring-meta/handoff/phase1-050-infra.md` 원문이 없어, OUT-OF-SCOPE 항목을 문구 단위로 대조할 수는 없다.",
+      "`../monitoring-meta/handoff/phase1-050/phase1-050-infra.md` 원문이 없어, OUT-OF-SCOPE 항목을 문구 단위로 대조할 수는 없다.",
       "통합본 v0.9의 보안 하드닝·하드코딩 부채 관련 직접 발췌가 없어, line 742/768 근거는 입력에 포함된 compose 주석과 정책 설명에 의존했다."
     ],
     "recommended_changes": [

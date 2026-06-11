@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# OpenSearch 인덱스 템플릿 + ISM 정책 부트스트랩 — phase1-050-infra(T1-1) 운영 골격(P-2).
+# OpenSearch 인덱스 템플릿 + ISM 정책 부트스트랩 — phase1-050-infra(T1-1) 운영 골격 슬라이스.
 #
 # 외부화 의도: compose one-shot(opensearch-init)과 향후 K8s Job/Helm hook이 같은 스크립트를
 #   재사용하도록 분리. 적용 대상 JSON도 파일로 분리(index-template.json / ism-policy.json).

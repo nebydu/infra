@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# MinIO 버킷/정책 부트스트랩 — phase1-050-infra(T1-1) 운영 골격(P-2).
+# MinIO 버킷/정책 부트스트랩 — phase1-050-infra(T1-1) 운영 골격 슬라이스.
 #
 # 외부화 의도: compose one-shot(minio-init)과 향후 K8s Job/Helm post-install hook이
 #   같은 스크립트를 재사용하도록 compose에서 분리(orchestrator 무관 이식성).

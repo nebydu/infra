@@ -61,7 +61,7 @@ services:
     command: |
       bash -c '
         set -e
-        for t in command-topic job-results audit-topic heartbeats-topic; do
+        for t in command-topic result-topic-job result-topic-log audit-topic heartbeats-topic; do
           kafka-topics --bootstrap-server kafka:29092 \
             --create --if-not-exists \
             --topic "$$t" \
